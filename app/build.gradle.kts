@@ -9,15 +9,15 @@ plugins {
 }
 
 android {
-  namespace = "com.example"
+  namespace = "com.kinzer"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
     applicationId = "com.aistudio.pipulse.vqxkzm"
     minSdk = 24
     targetSdk = 36
-    versionCode = 4
-    versionName = "4.0"
+    versionCode = 5
+    versionName = "5.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -106,7 +106,7 @@ dependencies {
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
   // implementation(libs.coil.compose)
-  implementation(libs.converter.moshi)
+  // implementation(libs.converter.moshi)
   // implementation(libs.firebase.ai)
   // implementation(libs.firebase.firestore)
   // implementation(libs.firebase.auth)
@@ -117,11 +117,11 @@ dependencies {
   // implementation(libs.firebase.appcheck.debug)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
-  implementation(libs.logging.interceptor)
-  implementation(libs.moshi.kotlin)
+  // implementation(libs.logging.interceptor)
+  // implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
   // implementation(libs.play.services.location)
-  implementation(libs.retrofit)
+  // implementation(libs.retrofit)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)
@@ -136,5 +136,5 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.test.manifest)
   debugImplementation(libs.androidx.compose.ui.tooling)
   "ksp"(libs.androidx.room.compiler)
-  "ksp"(libs.moshi.kotlin.codegen)
+  // "ksp"(libs.moshi.kotlin.codegen)
 }
