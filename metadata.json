@@ -1,0 +1,6 @@
+{
+  "name": "PiPulse",
+  "description": "Manage multiple local and VPN Pi-hole instances with real-time DNS query logs, whitelist/blacklist control, traffic analytics, and on-device encrypted credentials.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
