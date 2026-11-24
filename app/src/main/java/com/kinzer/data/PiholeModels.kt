@@ -22,7 +22,8 @@ enum class AuditActionType(val wireValue: String, val label: String) {
     DEVICE_ADDED("DEVICE_ADDED", "Added Pi-hole Device"),
     DEVICE_UPDATED("DEVICE_UPDATED", "Updated Pi-hole Device"),
     DEVICE_REMOVED("DEVICE_REMOVED", "Removed Pi-hole Device"),
-    GRAVITY_UPDATE("GRAVITY_UPDATE", "Gravity Update Triggered");
+    GRAVITY_UPDATE("GRAVITY_UPDATE", "Gravity Update Triggered"),
+    SSH_ROLLING_UPDATE("SSH_ROLLING_UPDATE", "Fleet SSH Update");
 
     companion object {
         fun fromWire(raw: String?): AuditActionType =
@@ -177,6 +178,50 @@ data class DeviceHealthMetrics(
     val ftlVersion: String? = null,
     val updateAvailable: Boolean = false,
     val errorMessage: String? = null
+)
+
+data class SshFleetConfig(
+    val username: String = "jeff",
+    val port: Int = 22,
+    val scriptPath: String = "",
+    val hasPrivateKey: Boolean = false,
+    val keyFileName: String = "",
+    val hasPassphrase: Boolean = false,
+    val rebootTimeoutSeconds: Int = 240
+) {
+    val isReadyForUpdate: Boolean
+        get() = username.isNotBlank() && scriptPath.isNotBlank() && hasPrivateKey
+}
+
+enum class RollingUpdateNodePhase(val label: String) {
+    QUEUED("Queued"),
+    CONNECTING("Connecting via SSH"),
+    RUNNING_SCRIPT("Running Update Script"),
+    CHECKING_REBOOT("Checking needrestart"),
+    REBOOTING("Rebooting & Waiting"),
+    VERIFYING_DNS("Verifying Pi-hole DNS"),
+    COMPLETED("Completed"),
+    FAILED("Failed"),
+    SKIPPED("Skipped")
+}
+
+data class RollingUpdateNodeStatus(
+    val deviceId: String,
+    val deviceName: String,
+    val host: String,
+    val phase: RollingUpdateNodePhase = RollingUpdateNodePhase.QUEUED,
+    val detail: String = "",
+    val rebooted: Boolean = false
+)
+
+data class RollingUpdateSessionState(
+    val isRunning: Boolean = false,
+    val isFinished: Boolean = false,
+    val wasCancelled: Boolean = false,
+    val haltedOnFailure: Boolean = false,
+    val nodes: List<RollingUpdateNodeStatus> = emptyList(),
+    val logs: List<String> = emptyList(),
+    val summaryMessage: String? = null
 )
 
 sealed interface UiState<out T> {

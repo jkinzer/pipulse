@@ -3,7 +3,9 @@ package com.kinzer.data.local
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -13,8 +15,10 @@ import com.kinzer.data.LocalAppSettings
 import com.kinzer.data.ManagementAuditLog
 import com.kinzer.data.PiholeApiVersion
 import com.kinzer.data.PiholeDeviceProfile
+import com.kinzer.data.SshFleetConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import java.util.UUID
 
@@ -35,6 +39,14 @@ class LocalPiholeRepository(
 
     private val activeDeviceKey = stringPreferencesKey("selected_scope_id")
     private val refreshIntervalKey = longPreferencesKey("refresh_interval_seconds")
+    private val sshUsernameKey = stringPreferencesKey("ssh_username")
+    private val sshPortKey = intPreferencesKey("ssh_port")
+    private val sshScriptPathKey = stringPreferencesKey("ssh_script_path")
+    private val sshHasKeyKey = booleanPreferencesKey("ssh_has_private_key")
+    private val sshKeyFileNameKey = stringPreferencesKey("ssh_key_file_name")
+    private val sshHasPassphraseKey = booleanPreferencesKey("ssh_has_passphrase")
+    private val sshRebootTimeoutKey = intPreferencesKey("ssh_reboot_timeout_seconds")
+    private val sshKnownHostsPrefix = "ssh_host_fp_"
 
     fun observeSettings(): Flow<LocalAppSettings> =
         appContext.localSettingsDataStore.data.map { prefs ->
@@ -43,6 +55,57 @@ class LocalPiholeRepository(
                 refreshIntervalSeconds = (prefs[refreshIntervalKey] ?: 5L).coerceIn(2L, 60L)
             )
         }
+
+    fun observeSshConfig(): Flow<SshFleetConfig> =
+        appContext.localSettingsDataStore.data.map { prefs ->
+            SshFleetConfig(
+                username = prefs[sshUsernameKey]?.takeIf { it.isNotBlank() } ?: "jeff",
+                port = (prefs[sshPortKey] ?: 22).coerceIn(1, 65535),
+                scriptPath = prefs[sshScriptPathKey].orEmpty(),
+                hasPrivateKey = prefs[sshHasKeyKey] ?: false,
+                keyFileName = prefs[sshKeyFileNameKey].orEmpty(),
+                hasPassphrase = prefs[sshHasPassphraseKey] ?: false,
+                rebootTimeoutSeconds = (prefs[sshRebootTimeoutKey] ?: 240).coerceIn(60, 600)
+            )
+        }
+
+    suspend fun saveSshConfig(config: SshFleetConfig): Result<Unit> = try {
+        appContext.localSettingsDataStore.edit { prefs ->
+            prefs[sshUsernameKey] = config.username.trim().ifBlank { "jeff" }.take(64)
+            prefs[sshPortKey] = config.port.coerceIn(1, 65535)
+            prefs[sshScriptPathKey] = config.scriptPath.trim().take(255)
+            prefs[sshHasKeyKey] = config.hasPrivateKey
+            prefs[sshKeyFileNameKey] = config.keyFileName.trim().take(100)
+            prefs[sshHasPassphraseKey] = config.hasPassphrase
+            prefs[sshRebootTimeoutKey] = config.rebootTimeoutSeconds.coerceIn(60, 600)
+        }
+        Result.success(Unit)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Result.failure(e)
+    }
+
+    suspend fun getTrustedHostKey(hostPortKey: String): String? =
+        appContext.localSettingsDataStore.data.first()[stringPreferencesKey("$sshKnownHostsPrefix$hostPortKey")]
+
+    suspend fun saveTrustedHostKey(hostPortKey: String, keyFingerprint: String) {
+        appContext.localSettingsDataStore.edit { prefs ->
+            prefs[stringPreferencesKey("$sshKnownHostsPrefix$hostPortKey")] = keyFingerprint
+        }
+    }
+
+    suspend fun clearTrustedHostKeys(): Result<Unit> = try {
+        appContext.localSettingsDataStore.edit { prefs ->
+            val toRemove = prefs.asMap().keys.filter { it.name.startsWith(sshKnownHostsPrefix) }
+            toRemove.forEach { prefs.remove(it) }
+        }
+        Result.success(Unit)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Result.failure(e)
+    }
 
     suspend fun updateActiveDevice(deviceId: String): Result<Unit> = try {
         appContext.localSettingsDataStore.edit { prefs ->

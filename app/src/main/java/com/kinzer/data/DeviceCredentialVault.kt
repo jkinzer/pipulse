@@ -108,10 +108,24 @@ class DeviceCredentialVault(private val appContext: Context) {
         }
     }
 
+    suspend fun saveSshPrivateKey(keyPem: String) = saveSecret(SSH_PRIVATE_KEY_SLOT, keyPem)
+
+    suspend fun getSshPrivateKey(): String = getSecret(SSH_PRIVATE_KEY_SLOT)
+
+    suspend fun removeSshPrivateKey() = removeSecret(SSH_PRIVATE_KEY_SLOT)
+
+    suspend fun saveSshPassphrase(passphrase: String) = saveSecret(SSH_PASSPHRASE_SLOT, passphrase)
+
+    suspend fun getSshPassphrase(): String = getSecret(SSH_PASSPHRASE_SLOT)
+
+    suspend fun removeSshPassphrase() = removeSecret(SSH_PASSPHRASE_SLOT)
+
     companion object {
         private const val TAG = "DeviceCredentialVault"
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
         private const val TRANSFORMATION = "AES/GCM/NoPadding"
         private const val GCM_TAG_BITS = 128
+        private const val SSH_PRIVATE_KEY_SLOT = "__ssh_fleet_private_key__"
+        private const val SSH_PASSPHRASE_SLOT = "__ssh_fleet_passphrase__"
     }
 }

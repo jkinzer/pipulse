@@ -20,6 +20,12 @@ import com.kinzer.data.PiholeConnectionResult
 import com.kinzer.data.PiholeDeviceProfile
 import com.kinzer.data.PiholeTelemetrySnapshot
 import com.kinzer.data.QueryStatusCategory
+import com.kinzer.data.RollingUpdateNodePhase
+import com.kinzer.data.RollingUpdateNodeStatus
+import com.kinzer.data.RollingUpdateSessionState
+import com.kinzer.data.SshFleetConfig
+import com.kinzer.data.SshFleetUpdater
+import com.kinzer.data.SshKeyValidationResult
 import com.kinzer.data.UiState
 import com.kinzer.data.local.LocalPiholeRepository
 import kotlinx.coroutines.CancellationException
@@ -61,11 +67,13 @@ data class LiveDeviceDataState(
 class PiPulseViewModel(
     private val localRepository: LocalPiholeRepository,
     private val apiClient: PiholeApiClient,
-    private val credentialVault: DeviceCredentialVault
+    private val credentialVault: DeviceCredentialVault,
+    private val sshUpdater: SshFleetUpdater
 ) : ViewModel() {
 
     private var pollingJob: Job? = null
     private var healthPollingJob: Job? = null
+    private var rollingUpdateJob: Job? = null
 
     val settingsState: StateFlow<LocalAppSettings> =
         localRepository.observeSettings()
@@ -78,6 +86,19 @@ class PiPulseViewModel(
                 scope = viewModelScope,
                 started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
                 initialValue = LocalAppSettings(activeDeviceId = ALL_DEVICES_ID)
+            )
+
+    val sshConfigState: StateFlow<SshFleetConfig> =
+        localRepository.observeSshConfig()
+            .catch { error ->
+                if (error is CancellationException) throw error
+                Log.w(TAG, "Error observing SSH config", error)
+                emit(SshFleetConfig())
+            }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
+                initialValue = SshFleetConfig()
             )
 
     val devicesState: StateFlow<UiState<List<PiholeDeviceProfile>>> =
@@ -175,6 +196,15 @@ class PiPulseViewModel(
 
     private val _healthRefreshing = MutableStateFlow(false)
     val healthRefreshing: StateFlow<Boolean> = _healthRefreshing.asStateFlow()
+
+    private val _sshTestLoading = MutableStateFlow(false)
+    val sshTestLoading: StateFlow<Boolean> = _sshTestLoading.asStateFlow()
+
+    private val _sshTestResult = MutableStateFlow<PiholeConnectionResult?>(null)
+    val sshTestResult: StateFlow<PiholeConnectionResult?> = _sshTestResult.asStateFlow()
+
+    private val _rollingUpdateState = MutableStateFlow(RollingUpdateSessionState())
+    val rollingUpdateState: StateFlow<RollingUpdateSessionState> = _rollingUpdateState.asStateFlow()
 
     init {
         observeSelectionForPolling()
@@ -1001,6 +1031,288 @@ class PiPulseViewModel(
         _domainKindFilter.value = kind
     }
 
+    fun validateSshKey(keyPem: String, passphrase: String): SshKeyValidationResult =
+        sshUpdater.validatePrivateKey(keyPem, passphrase)
+
+    fun clearSshTestResult() {
+        _sshTestResult.value = null
+    }
+
+    fun testSshConnection(
+        device: PiholeDeviceProfile,
+        username: String,
+        port: Int,
+        newKeyPem: String?,
+        passphraseInput: String
+    ) {
+        viewModelScope.launch {
+            _sshTestLoading.value = true
+            _sshTestResult.value = null
+            val effectiveKey = if (!newKeyPem.isNullOrBlank()) {
+                newKeyPem
+            } else {
+                credentialVault.getSshPrivateKey()
+            }
+            val effectivePassphrase = if (passphraseInput.isNotEmpty()) {
+                passphraseInput
+            } else if (newKeyPem.isNullOrBlank()) {
+                credentialVault.getSshPassphrase()
+            } else {
+                ""
+            }
+            _sshTestResult.value = sshUpdater.testConnection(
+                device = device,
+                username = username,
+                port = port,
+                privateKeyPem = effectiveKey,
+                passphrase = effectivePassphrase
+            )
+            _sshTestLoading.value = false
+        }
+    }
+
+    fun saveSshConfig(
+        username: String,
+        port: Int,
+        scriptPath: String,
+        newKeyPem: String?,
+        keyFileName: String,
+        passphraseInput: String,
+        rebootTimeoutSeconds: Int,
+        onSaved: () -> Unit
+    ) {
+        viewModelScope.launch {
+            val current = sshConfigState.value
+            val hasKey = !newKeyPem.isNullOrBlank() || current.hasPrivateKey
+            if (!newKeyPem.isNullOrBlank()) {
+                credentialVault.saveSshPrivateKey(newKeyPem.trim())
+                if (passphraseInput.isNotEmpty()) {
+                    credentialVault.saveSshPassphrase(passphraseInput)
+                } else {
+                    credentialVault.removeSshPassphrase()
+                }
+            } else if (passphraseInput.isNotEmpty()) {
+                credentialVault.saveSshPassphrase(passphraseInput)
+            }
+
+            val hasPass = if (!newKeyPem.isNullOrBlank()) {
+                passphraseInput.isNotEmpty()
+            } else {
+                passphraseInput.isNotEmpty() || current.hasPassphrase
+            }
+
+            val updated = SshFleetConfig(
+                username = username.trim().ifBlank { "jeff" },
+                port = port.coerceIn(1, 65535),
+                scriptPath = scriptPath.trim(),
+                hasPrivateKey = hasKey,
+                keyFileName = keyFileName.trim().ifBlank { current.keyFileName.ifBlank { "id_rsa" } },
+                hasPassphrase = hasPass,
+                rebootTimeoutSeconds = rebootTimeoutSeconds.coerceIn(60, 600)
+            )
+            localRepository.saveSshConfig(updated)
+                .onSuccess {
+                    _feedbackMessage.value = "Saved SSH rolling update configuration"
+                    onSaved()
+                }
+                .onFailure { err ->
+                    _feedbackMessage.value = err.message ?: "Failed to save SSH configuration."
+                }
+        }
+    }
+
+    fun removeStoredSshKey() {
+        viewModelScope.launch {
+            credentialVault.removeSshPrivateKey()
+            credentialVault.removeSshPassphrase()
+            val current = sshConfigState.value
+            localRepository.saveSshConfig(
+                current.copy(
+                    hasPrivateKey = false,
+                    keyFileName = "",
+                    hasPassphrase = false
+                )
+            )
+            _feedbackMessage.value = "Removed stored SSH private key"
+        }
+    }
+
+    fun clearTrustedSshHostKeys() {
+        viewModelScope.launch {
+            localRepository.clearTrustedHostKeys()
+                .onSuccess { _feedbackMessage.value = "Cleared trusted SSH host keys" }
+                .onFailure { err -> _feedbackMessage.value = err.message ?: "Could not clear host keys." }
+        }
+    }
+
+    fun startFleetRollingUpdate() {
+        if (_rollingUpdateState.value.isRunning) return
+        val devices = currentDevices()
+        if (devices.isEmpty()) {
+            _feedbackMessage.value = "Add at least one Pi-hole server first."
+            return
+        }
+        val config = sshConfigState.value
+        if (!config.isReadyForUpdate) {
+            _feedbackMessage.value = "Configure SSH key and update script path first."
+            return
+        }
+
+        rollingUpdateJob?.cancel()
+        rollingUpdateJob = viewModelScope.launch {
+            val privateKey = credentialVault.getSshPrivateKey()
+            if (privateKey.isBlank()) {
+                _feedbackMessage.value = "Stored SSH private key is missing. Re-upload id_rsa in SSH Config."
+                return@launch
+            }
+            val passphrase = credentialVault.getSshPassphrase()
+
+            val initialNodes = devices.map { d ->
+                RollingUpdateNodeStatus(
+                    deviceId = d.id,
+                    deviceName = d.name,
+                    host = d.host,
+                    phase = RollingUpdateNodePhase.QUEUED
+                )
+            }
+            _rollingUpdateState.value = RollingUpdateSessionState(
+                isRunning = true,
+                isFinished = false,
+                wasCancelled = false,
+                haltedOnFailure = false,
+                nodes = initialNodes,
+                logs = listOf(
+                    "Starting sequential rolling update for ${devices.size} server(s)",
+                    "SSH user: ${config.username} • Port: ${config.port} • Script: ${config.scriptPath}"
+                )
+            )
+
+            var completedCount = 0
+            var rebootedCount = 0
+            var halted = false
+
+            try {
+                for (index in devices.indices) {
+                    val device = devices[index]
+                    val apiSecret = credentialVault.getSecret(device.id)
+                    val outcome = sshUpdater.updateSingleNode(
+                        device = device,
+                        apiSecret = apiSecret,
+                        config = config,
+                        privateKeyPem = privateKey,
+                        passphrase = passphrase,
+                        onPhaseChange = { phase, detail ->
+                            updateRollingNodeStatus(device.id, phase, detail)
+                        },
+                        onLogLine = { line ->
+                            appendRollingLog(line)
+                        }
+                    )
+
+                    if (outcome.succeeded) {
+                        completedCount++
+                        if (outcome.rebooted) rebootedCount++
+                        updateRollingNodeStatus(
+                            deviceId = device.id,
+                            phase = RollingUpdateNodePhase.COMPLETED,
+                            detail = outcome.summary,
+                            rebooted = outcome.rebooted
+                        )
+                    } else {
+                        halted = true
+                        for (remIdx in (index + 1) until devices.size) {
+                            updateRollingNodeStatus(
+                                deviceId = devices[remIdx].id,
+                                phase = RollingUpdateNodePhase.SKIPPED,
+                                detail = "Skipped — prior node failed"
+                            )
+                        }
+                        break
+                    }
+                }
+
+                val summary = if (halted) {
+                    "Halted after $completedCount/${devices.size} node(s) to protect DNS availability"
+                } else {
+                    "Updated $completedCount/${devices.size} server(s) ($rebootedCount rebooted)"
+                }
+                appendRollingLog("=== $summary ===")
+
+                _rollingUpdateState.update {
+                    it.copy(
+                        isRunning = false,
+                        isFinished = true,
+                        haltedOnFailure = halted,
+                        summaryMessage = summary
+                    )
+                }
+
+                localRepository.recordAuditLog(
+                    deviceId = ALL_DEVICES_ID,
+                    deviceName = "Fleet (${devices.size} nodes)",
+                    actionType = AuditActionType.SSH_ROLLING_UPDATE,
+                    target = summary
+                )
+                refreshDeviceHealth()
+                refreshNow(includeDomains = false)
+            } catch (e: CancellationException) {
+                _rollingUpdateState.update { state ->
+                    val updatedNodes = state.nodes.map { n ->
+                        if (n.phase == RollingUpdateNodePhase.QUEUED ||
+                            n.phase !in setOf(RollingUpdateNodePhase.COMPLETED, RollingUpdateNodePhase.FAILED)
+                        ) {
+                            n.copy(phase = RollingUpdateNodePhase.SKIPPED, detail = "Cancelled")
+                        } else {
+                            n
+                        }
+                    }
+                    state.copy(
+                        isRunning = false,
+                        isFinished = true,
+                        wasCancelled = true,
+                        nodes = updatedNodes,
+                        logs = (state.logs + "=== Rolling update cancelled by user ===").takeLast(MAX_ROLLING_LOG_LINES),
+                        summaryMessage = "Cancelled after $completedCount/${devices.size} node(s)"
+                    )
+                }
+                throw e
+            }
+        }
+    }
+
+    fun cancelFleetRollingUpdate() {
+        rollingUpdateJob?.cancel()
+    }
+
+    private fun updateRollingNodeStatus(
+        deviceId: String,
+        phase: RollingUpdateNodePhase,
+        detail: String,
+        rebooted: Boolean? = null
+    ) {
+        _rollingUpdateState.update { state ->
+            state.copy(
+                nodes = state.nodes.map { node ->
+                    if (node.deviceId == deviceId) {
+                        node.copy(
+                            phase = phase,
+                            detail = detail,
+                            rebooted = rebooted ?: node.rebooted
+                        )
+                    } else {
+                        node
+                    }
+                }
+            )
+        }
+    }
+
+    private fun appendRollingLog(line: String) {
+        _rollingUpdateState.update { state ->
+            state.copy(logs = (state.logs + line).takeLast(MAX_ROLLING_LOG_LINES))
+        }
+    }
+
     fun consumeFeedback() {
         _feedbackMessage.value = null
     }
@@ -1009,6 +1321,7 @@ class PiPulseViewModel(
         super.onCleared()
         pollingJob?.cancel()
         healthPollingJob?.cancel()
+        rollingUpdateJob?.cancel()
     }
 
     private fun formatDurationLabel(seconds: Int): String = when {
@@ -1028,5 +1341,6 @@ class PiPulseViewModel(
         const val TAG = "PiPulseVM"
         const val STOP_TIMEOUT_MILLIS = 5000L
         const val HEALTH_POLL_INTERVAL_MILLIS = 15_000L
+        const val MAX_ROLLING_LOG_LINES = 500
     }
 }

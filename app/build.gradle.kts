@@ -16,8 +16,8 @@ android {
     applicationId = "com.aistudio.pipulse.vqxkzm"
     minSdk = 24
     targetSdk = 36
-    versionCode = 5
-    versionName = "5.0"
+    versionCode = 7
+    versionName = "7.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -119,6 +119,7 @@ dependencies {
   implementation(libs.kotlinx.coroutines.core)
   // implementation(libs.logging.interceptor)
   // implementation(libs.moshi.kotlin)
+  implementation(libs.mwiede.jsch)
   implementation(libs.okhttp)
   // implementation(libs.play.services.location)
   // implementation(libs.retrofit)

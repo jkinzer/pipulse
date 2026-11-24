@@ -52,10 +52,13 @@ import androidx.navigation.compose.rememberNavController
 import com.kinzer.data.DeviceCredentialVault
 import com.kinzer.data.PiholeApiClient
 import com.kinzer.data.PiholeDeviceProfile
+import com.kinzer.data.SshFleetUpdater
 import com.kinzer.data.UiState
 import com.kinzer.data.local.LocalPiholeRepository
 import com.kinzer.ui.components.AddDomainDialog
 import com.kinzer.ui.components.DeviceEditorDialog
+import com.kinzer.ui.components.RollingUpdateDialog
+import com.kinzer.ui.components.SshConfigDialog
 import com.kinzer.ui.screens.DashboardScreen
 import com.kinzer.ui.screens.DevicesSettingsScreen
 import com.kinzer.ui.screens.DomainListsScreen
@@ -90,10 +93,13 @@ fun PiPulseApp() {
                 val app = checkNotNull(this[APPLICATION_KEY]) {
                     "APPLICATION_KEY missing from CreationExtras"
                 }
+                val localRepository = LocalPiholeRepository(app)
+                val apiClient = PiholeApiClient()
                 PiPulseViewModel(
-                    localRepository = LocalPiholeRepository(app),
-                    apiClient = PiholeApiClient(),
-                    credentialVault = DeviceCredentialVault(app)
+                    localRepository = localRepository,
+                    apiClient = apiClient,
+                    credentialVault = DeviceCredentialVault(app),
+                    sshUpdater = SshFleetUpdater(localRepository, apiClient)
                 )
             }
         }
@@ -117,6 +123,10 @@ fun PiPulseApp() {
     val testResult by viewModel.connectionTestResult.collectAsStateWithLifecycle()
     val deviceHealthMap by viewModel.deviceHealthMap.collectAsStateWithLifecycle()
     val healthRefreshing by viewModel.healthRefreshing.collectAsStateWithLifecycle()
+    val sshConfig by viewModel.sshConfigState.collectAsStateWithLifecycle()
+    val sshTestLoading by viewModel.sshTestLoading.collectAsStateWithLifecycle()
+    val sshTestResult by viewModel.sshTestResult.collectAsStateWithLifecycle()
+    val rollingUpdateState by viewModel.rollingUpdateState.collectAsStateWithLifecycle()
 
     val devices = (devicesUi as? UiState.Success)?.data.orEmpty()
     val auditLogs = (auditLogsUi as? UiState.Success)?.data.orEmpty()
@@ -131,6 +141,8 @@ fun PiPulseApp() {
     var showDeviceEditor by remember { mutableStateOf(false) }
     var editingDevice by remember { mutableStateOf<PiholeDeviceProfile?>(null) }
     var showAddDomainDialog by remember { mutableStateOf(false) }
+    var showSshConfigDialog by remember { mutableStateOf(false) }
+    var showRollingUpdateDialog by remember { mutableStateOf(false) }
 
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
@@ -316,10 +328,23 @@ fun PiPulseApp() {
                                 isOnline = isDeviceOnline,
                                 deviceHealthMap = deviceHealthMap,
                                 healthRefreshing = healthRefreshing,
+                                sshConfig = sshConfig,
+                                rollingUpdateState = rollingUpdateState,
                                 auditLogs = auditLogs,
                                 onSelectAllDevices = viewModel::selectAllDevices,
                                 onSelectDevice = viewModel::selectActiveDevice,
                                 onRefreshHealth = viewModel::refreshDeviceHealth,
+                                onOpenSshConfig = {
+                                    viewModel.clearSshTestResult()
+                                    showSshConfigDialog = true
+                                },
+                                onStartRollingUpdate = {
+                                    showRollingUpdateDialog = true
+                                    viewModel.startFleetRollingUpdate()
+                                },
+                                onViewRollingUpdate = {
+                                    showRollingUpdateDialog = true
+                                },
                                 onAddDeviceClick = openAddDeviceDialog,
                                 onEditDeviceClick = { device ->
                                     editingDevice = device
@@ -388,6 +413,46 @@ fun PiPulseApp() {
                     onComplete = { showAddDomainDialog = false }
                 )
             }
+        )
+    }
+
+    if (showSshConfigDialog) {
+        SshConfigDialog(
+            initialConfig = sshConfig,
+            sampleTestDevice = activeDevice ?: devices.firstOrNull(),
+            testLoading = sshTestLoading,
+            testResult = sshTestResult,
+            onValidateKey = viewModel::validateSshKey,
+            onTestSsh = viewModel::testSshConnection,
+            onClearTrustedHosts = viewModel::clearTrustedSshHostKeys,
+            onRemoveStoredKey = viewModel::removeStoredSshKey,
+            onDismiss = {
+                showSshConfigDialog = false
+                viewModel.clearSshTestResult()
+            },
+            onSave = { user, port, script, newKey, fileName, pass, timeout ->
+                viewModel.saveSshConfig(
+                    username = user,
+                    port = port,
+                    scriptPath = script,
+                    newKeyPem = newKey,
+                    keyFileName = fileName,
+                    passphraseInput = pass,
+                    rebootTimeoutSeconds = timeout,
+                    onSaved = {
+                        showSshConfigDialog = false
+                        viewModel.clearSshTestResult()
+                    }
+                )
+            }
+        )
+    }
+
+    if (showRollingUpdateDialog) {
+        RollingUpdateDialog(
+            state = rollingUpdateState,
+            onCancelRun = viewModel::cancelFleetRollingUpdate,
+            onDismiss = { showRollingUpdateDialog = false }
         )
     }
 }

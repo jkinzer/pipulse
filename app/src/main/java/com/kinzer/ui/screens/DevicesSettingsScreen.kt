@@ -36,6 +36,8 @@ import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.SystemUpdateAlt
+import androidx.compose.material.icons.rounded.Terminal
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -44,6 +46,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -65,6 +68,8 @@ import com.kinzer.data.DeviceHealthMetrics
 import com.kinzer.data.ManagementAuditLog
 import com.kinzer.data.PiholeApiVersion
 import com.kinzer.data.PiholeDeviceProfile
+import com.kinzer.data.RollingUpdateSessionState
+import com.kinzer.data.SshFleetConfig
 import com.kinzer.ui.components.CompactDeviceSwitcher
 import com.kinzer.ui.theme.CyanPulse
 import com.kinzer.ui.theme.EmeraldSignal
@@ -83,10 +88,15 @@ fun DevicesSettingsScreen(
     isOnline: Boolean,
     deviceHealthMap: Map<String, DeviceHealthMetrics>,
     healthRefreshing: Boolean,
+    sshConfig: SshFleetConfig,
+    rollingUpdateState: RollingUpdateSessionState,
     auditLogs: List<ManagementAuditLog>,
     onSelectAllDevices: () -> Unit,
     onSelectDevice: (String) -> Unit,
     onRefreshHealth: () -> Unit,
+    onOpenSshConfig: () -> Unit,
+    onStartRollingUpdate: () -> Unit,
+    onViewRollingUpdate: () -> Unit,
     onAddDeviceClick: () -> Unit,
     onEditDeviceClick: (PiholeDeviceProfile) -> Unit,
     onDeleteDevice: (PiholeDeviceProfile) -> Unit,
@@ -95,6 +105,7 @@ fun DevicesSettingsScreen(
 ) {
     val extended = PiPulseThemeTokens.extended
     var devicePendingDelete by remember { mutableStateOf<PiholeDeviceProfile?>(null) }
+    var showConfirmRollingUpdate by remember { mutableStateOf(false) }
 
     Box(
         modifier = Modifier.fillMaxSize(),
@@ -245,6 +256,24 @@ fun DevicesSettingsScreen(
                         onDelete = { devicePendingDelete = device }
                     )
                 }
+            }
+
+            // SSH Rolling Update & Server Maintenance Card
+            item {
+                SshRollingUpdateCard(
+                    devices = devices,
+                    sshConfig = sshConfig,
+                    rollingUpdateState = rollingUpdateState,
+                    onConfigureSsh = onOpenSshConfig,
+                    onRequestRollingUpdate = {
+                        if (rollingUpdateState.isRunning) {
+                            onViewRollingUpdate()
+                        } else {
+                            showConfirmRollingUpdate = true
+                        }
+                    },
+                    onViewLastOutput = onViewRollingUpdate
+                )
             }
 
             // Polling Cadence Settings
@@ -407,6 +436,252 @@ fun DevicesSettingsScreen(
                 }
             }
         )
+    }
+
+    if (showConfirmRollingUpdate) {
+        val orderedNames = devices.mapIndexed { idx, d -> "${idx + 1}. ${d.name} (${d.host})" }.joinToString("\n")
+        AlertDialog(
+            onDismissRequest = { showConfirmRollingUpdate = false },
+            title = { Text("Run Rolling Update on ${devices.size} Server(s)?") },
+            text = {
+                Text(
+                    text = "Each server will be updated in sequence:\n\n$orderedNames\n\n" +
+                        "Script: ${sshConfig.scriptPath}\n" +
+                        "User: ${sshConfig.username} (port ${sshConfig.port})\n\n" +
+                        "If needrestart or /var/run/reboot-required signals a reboot, PiPulse will run sudo reboot, disconnect, and wait until the server finishes rebooting and Pi-hole DNS responds before starting the next server."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showConfirmRollingUpdate = false
+                        onStartRollingUpdate()
+                    },
+                    modifier = Modifier.testTag("confirm_rolling_update_button")
+                ) {
+                    Text("Update Now", color = EmeraldSignal)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showConfirmRollingUpdate = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun SshRollingUpdateCard(
+    devices: List<PiholeDeviceProfile>,
+    sshConfig: SshFleetConfig,
+    rollingUpdateState: RollingUpdateSessionState,
+    onConfigureSsh: () -> Unit,
+    onRequestRollingUpdate: () -> Unit,
+    onViewLastOutput: () -> Unit
+) {
+    val extended = PiPulseThemeTokens.extended
+    val canLaunchUpdate = devices.isNotEmpty() && sshConfig.isReadyForUpdate
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .border(
+                width = if (rollingUpdateState.isRunning) 1.5.dp else 1.dp,
+                color = if (rollingUpdateState.isRunning) CyanPulse else MaterialTheme.colorScheme.outlineVariant,
+                shape = RoundedCornerShape(20.dp)
+            )
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(CyanPulse.copy(alpha = 0.14f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.SystemUpdateAlt,
+                        contentDescription = null,
+                        tint = CyanPulse,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                Column {
+                    Text(
+                        text = "SSH Rolling Update",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Sequential script run, needrestart check & safe reboot",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+
+        // Configuration status pills
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            BadgePill(
+                text = "${sshConfig.username}:${sshConfig.port}",
+                accent = CyanPulse
+            )
+            if (sshConfig.hasPrivateKey) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(extended.permittedContainer)
+                        .padding(horizontal = 7.dp, vertical = 3.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Key,
+                        contentDescription = null,
+                        tint = extended.permitted,
+                        modifier = Modifier.size(12.dp)
+                    )
+                    Text(
+                        text = sshConfig.keyFileName.ifBlank { "id_rsa" },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = extended.permitted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            } else {
+                BadgePill(
+                    text = "SSH Key Not Set",
+                    accent = extended.warning
+                )
+            }
+        }
+
+        // Configured script preview
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                .padding(horizontal = 12.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Terminal,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(16.dp)
+            )
+            Text(
+                text = sshConfig.scriptPath.ifBlank { "No update script configured yet" },
+                style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMonoFontFamily),
+                color = if (sshConfig.scriptPath.isNotBlank()) {
+                    MaterialTheme.colorScheme.onSurface
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+
+        if (rollingUpdateState.summaryMessage != null && !rollingUpdateState.isRunning) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = rollingUpdateState.summaryMessage,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (rollingUpdateState.haltedOnFailure) extended.blocked else extended.permitted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(
+                    onClick = onViewLastOutput,
+                    modifier = Modifier.testTag("ssh_view_last_log_button")
+                ) {
+                    Text("View Log")
+                }
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            OutlinedButton(
+                onClick = onConfigureSsh,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .height(48.dp)
+                    .testTag("ssh_configure_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Tune,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("SSH Config", maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+
+            Button(
+                onClick = onRequestRollingUpdate,
+                enabled = rollingUpdateState.isRunning || canLaunchUpdate,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier
+                    .weight(1.25f)
+                    .height(48.dp)
+                    .testTag("ssh_update_all_button")
+            ) {
+                if (rollingUpdateState.isRunning) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onPrimary
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("View Progress", maxLines = 1)
+                } else {
+                    Icon(
+                        imageVector = Icons.Rounded.SystemUpdateAlt,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (devices.size > 1) "Update All (${devices.size})" else "Update Server",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
     }
 }
 
