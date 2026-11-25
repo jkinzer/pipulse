@@ -42,7 +42,7 @@ An Android monitoring app for [Pi-hole](https://pi-hole.net/) network-wide ad an
    ```
 
  * Configure environment variables (if applicable)
-   Copy .env.example to .env and fill in any required configuration values:
+   Copy `.env.example` to `.env` and fill in any required configuration values:
    ```bash
    cp .env.example .env
    ```
@@ -50,11 +50,13 @@ An Android monitoring app for [Pi-hole](https://pi-hole.net/) network-wide ad an
  * Build and run
    * Open the project directory in Android Studio, allow Gradle sync to finish, and run the app configuration on an emulator or physical device.
    * Or build from the command line using the Gradle wrapper:
+     ```bash
      ./gradlew assembleDebug
+     ```
 
 ## Configuration Notes
  * Ensure your Android device or emulator can reach your Pi-hole host address and port over HTTP/HTTPS.
- * Keep sensitive credentials, API tokens, or local endpoints out of version control (.gitignore is configured for local build and environment files).
+ * Keep sensitive credentials, API tokens, or local endpoints out of version control (`.gitignore` is configured for local build and environment files).
 
 ## Contributing
 Contributions, bug reports, and feature suggestions are welcome via issues and pull requests on GitHub.
