@@ -64,3 +64,5 @@ Contributions, bug reports, and feature suggestions are welcome via issues and p
 ## License
 This project is licensed under the Apache License 2.0. You are free to use, modify, and distribute this software, including for commercial purposes, provided you include the original copyright notice, license text, and a notice of any significant changes made.
 
+## Standard Legal Disclaimer 
+PiPulse is an independent project and is not affiliated with or endorsed by Pi-hole LLC. This project is for educational purposes only.
