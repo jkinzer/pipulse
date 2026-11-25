@@ -2,6 +2,10 @@
 
 An Android monitoring app for [Pi-hole](https://pi-hole.net/) network-wide ad and tracker blocking.
 
+## Screenshots
+
+![Dashboard](assets/Screenshot_20261124-203742.png)
+
 ## Project Structure
 
 - `app/` — Android application source code, resources, and module-level configuration
