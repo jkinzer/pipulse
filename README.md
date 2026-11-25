@@ -4,7 +4,21 @@ An Android monitoring app for [Pi-hole](https://pi-hole.net/) network-wide ad an
 
 ## Screenshots
 
+### Dashboard 
+
 ![Dashboard](assets/Screenshot_20261124-203742.png)
+
+### Stats
+
+![Stats](assets/Screenshot_20261124-203812.png)
+
+### Devices 
+
+![Devices](assets/1795581674994.jpg)
+
+### Rolling Update
+
+![Rolling Update](assets/1795582258162.jpg)
 
 ## Project Structure
 
